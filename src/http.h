@@ -2,6 +2,7 @@
 #define HTTP_H
 
 #include <stddef.h>
+#include "config.h" // For ServerConfig
 
 // Represents a single client connection
 typedef struct Connection {
@@ -24,5 +25,11 @@ int parseHttpRequest(char* requestStr, size_t requestLen, HttpRequest* req);
 
 // Frees the memory allocated for an HttpRequest.
 void freeHttpRequest(HttpRequest* req);
+
+// Returns the MIME type for a given file path.
+const char* getMimeType(const char* path);
+
+// Handles a request for a static file.
+void handleStaticRequest(int fd, const char* uri, const ServerConfig* config);
 
 #endif // HTTP_H 

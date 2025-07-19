@@ -9,10 +9,11 @@
 #include <string.h>
 #include <sys/epoll.h>
 #include "http.h"
+#include "logger.h"
+#include "config.h"
 #include <stdlib.h>
 
-#define DEFAULT_PORT 8080
-#define MAX_EVENTS 64 // Increased max events
+#define MAX_EVENTS 64
 #define INITIAL_BUF_SIZE 4096
 
 static int setNonBlocking(int fd) {
@@ -65,30 +66,39 @@ static int createAndBind(int port) {
 }
 
 void startServer(const char* configFilePath) {
-    if (configFilePath) {
-        printf("Starting server with config file: %s\n", configFilePath);
-        // Configuration parsing logic will be added later
-    } else {
-        printf("Starting server with default configuration.\n");
+    ServerConfig config;
+    loadConfig(configFilePath, &config);
+
+    if (logger_init(config.log_level, config.log_target, config.log_path) != 0) {
+        fprintf(stderr, "Failed to initialize logger.\n");
+        return;
     }
 
-    int listenFd = createAndBind(DEFAULT_PORT);
+    log_system(LOG_INFO, "Server starting with configuration:");
+    log_system(LOG_INFO, "  - Port: %d", config.listen_port);
+    log_system(LOG_INFO, "  - DocumentRoot: %s", config.document_root);
+    
+    // We need to pass the DocumentRoot to the http module.
+    // For now, let's assume http.c can access it.
+    // A better way would be to pass config to http functions.
+
+    int listenFd = createAndBind(config.listen_port);
     if (listenFd == -1) {
-        fprintf(stderr, "Failed to create and bind socket.\n");
+        log_system(LOG_ERROR, "Failed to create and bind socket.");
         return;
     }
 
     if (listen(listenFd, SOMAXCONN) == -1) {
-        perror("listen error");
+        log_system(LOG_ERROR, "listen error: %s", strerror(errno));
         close(listenFd);
         return;
     }
 
-    printf("Server listening on port %d...\n", DEFAULT_PORT);
+    log_system(LOG_INFO, "Server listening on port %d...", config.listen_port);
 
     int epollFd = epoll_create1(0);
     if (epollFd == -1) {
-        perror("epoll_create1");
+        log_system(LOG_ERROR, "epoll_create1: %s", strerror(errno));
         close(listenFd);
         return;
     }
@@ -97,7 +107,7 @@ void startServer(const char* configFilePath) {
     event.data.fd = listenFd;
     event.events = EPOLLIN | EPOLLET;
     if (epoll_ctl(epollFd, EPOLL_CTL_ADD, listenFd, &event) == -1) {
-        perror("epoll_ctl: listenFd");
+        log_system(LOG_ERROR, "epoll_ctl: listenFd: %s", strerror(errno));
         close(epollFd);
         close(listenFd);
         return;
@@ -105,7 +115,7 @@ void startServer(const char* configFilePath) {
 
     struct epoll_event events[MAX_EVENTS];
 
-    printf("Server is running...\n");
+    log_system(LOG_INFO, "Server is running...");
     while (1) {
         int n = epoll_wait(epollFd, events, MAX_EVENTS, -1);
         for (int i = 0; i < n; i++) {
@@ -114,7 +124,7 @@ void startServer(const char* configFilePath) {
                     int connFd = accept(listenFd, NULL, NULL);
                     if (connFd == -1) {
                         if (errno == EAGAIN || errno == EWOULDBLOCK) break;
-                        perror("accept");
+                        log_system(LOG_ERROR, "accept: %s", strerror(errno));
                         break;
                     }
                     setNonBlocking(connFd);
@@ -156,9 +166,8 @@ void startServer(const char* configFilePath) {
                 if (header_end) {
                     HttpRequest req;
                     if (parseHttpRequest(conn->read_buf, conn->read_len, &req) == 0) {
-                        printf("Parsed Request: Method=%s, URI=%s\n", req.method, req.uri);
-                        char response[] = "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: 15\r\n\r\nHello, world!\r\n";
-                        write(conn->fd, response, sizeof(response) - 1);
+                        log_system(LOG_INFO, "Parsed Request: Method=%s, URI=%s", req.method, req.uri);
+                        handleStaticRequest(conn->fd, req.uri, &config);
                         freeHttpRequest(&req);
                     }
                     // For simplicity, we close connection after one request.
@@ -175,6 +184,8 @@ void startServer(const char* configFilePath) {
             }
         }
     }
+    log_system(LOG_INFO, "Server shutting down.");
     close(epollFd);
     close(listenFd);
+    logger_shutdown();
 } 
