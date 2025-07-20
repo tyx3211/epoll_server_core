@@ -12,53 +12,39 @@
 #include <errno.h> // Required for errno
 #include "logger.h"
 #include "config.h"
+#include <ctype.h>
+#include <strings.h>
 
 #define MAX_PATH_LEN 256
 
+// Helper function to trim leading/trailing whitespace
+static char* trim(char* str) {
+    if (!str) return NULL;
+    char* end;
+    while (isspace((unsigned char)*str)) str++;
+    if (*str == 0) return str;
+    end = str + strlen(str) - 1;
+    while (end > str && isspace((unsigned char)*end)) end--;
+    end[1] = '\0';
+    return str;
+}
+
+
 int parseHttpRequest(char* requestStr, size_t requestLen, HttpRequest* req) {
-    if (!requestStr || requestLen == 0 || !req) {
-        return -1;
-    }
-
-    char* saveptr1;
-    char* line = strtok_r(requestStr, "\r\n", &saveptr1);
-
-    if (!line) {
-        fprintf(stderr, "PARSE_DEBUG: line is NULL\n");
-        fprintf(stderr, "Failed to parse request line\n");
-        return -1;
-    }
-
-    char* saveptr2;
-    char* method = strtok_r(line, " ", &saveptr2);
-    char* uri = strtok_r(NULL, " ", &saveptr2);
-    char* version = strtok_r(NULL, " ", &saveptr2);
-
-    if (!method || !uri || !version) {
-        fprintf(stderr, "PARSE_DEBUG: method, uri, or version is NULL\n");
-        fprintf(stderr, "Malformed request line\n");
-        return -1;
-    }
-
-    req->method = strdup(method);
-    req->uri = strdup(uri);
-
-    if (!req->method || !req->uri) {
-        // strdup failed (out of memory)
-        free(req->method);
-        free(req->uri);
-        req->method = NULL;
-        req->uri = NULL;
-        return -1;
-    }
-
-    return 0;
+    // This function is now deprecated and will be replaced by
+    // an incremental parser in server.c.
+    // Returning -1 to indicate it should not be used.
+    return -1;
 }
 
 void freeHttpRequest(HttpRequest* req) {
     if (req) {
         free(req->method);
         free(req->uri);
+        for (int i = 0; i < req->header_count; i++) {
+            free(req->headers[i].key);
+            free(req->headers[i].value);
+        }
         req->method = NULL;
         req->uri = NULL;
     }

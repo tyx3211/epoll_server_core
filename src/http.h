@@ -4,23 +4,47 @@
 #include <stddef.h>
 #include "config.h" // For ServerConfig
 
+typedef enum {
+    PARSE_STATE_REQ_LINE,
+    PARSE_STATE_HEADERS,
+    PARSE_STATE_BODY,
+    PARSE_STATE_COMPLETE
+} ParsingState;
+
+#define MAX_HEADERS 32
+
+typedef struct {
+    char* key;
+    char* value;
+} HttpHeader;
+
+// Represents a parsed HTTP request
+typedef struct {
+    char* method;
+    char* uri;
+    HttpHeader headers[MAX_HEADERS];
+    int header_count;
+    char* body;
+    size_t content_length;
+} HttpRequest;
+
 // Represents a single client connection
 typedef struct Connection {
     int fd;
     char* read_buf;      // Dynamically allocated buffer for the request
     size_t read_buf_size; // Current allocated size of read_buf
     size_t read_len;      // Current length of data in read_buf
+    
+    // Parsing state
+    ParsingState parsing_state;
+    size_t parsed_offset; // How much of read_buf has been processed
+    HttpRequest request;    // The request being built
 } Connection;
 
-// Represents a parsed HTTP request
-typedef struct {
-    char* method;
-    char* uri;
-    // We will add headers later
-} HttpRequest;
 
 // Parses a raw request string into an HttpRequest struct.
-// Returns 0 on success, -1 on failure.
+// Returns the total length of the parsed request (headers + body) on success,
+// or -1 on failure/incomplete request.
 int parseHttpRequest(char* requestStr, size_t requestLen, HttpRequest* req);
 
 // Frees the memory allocated for an HttpRequest.

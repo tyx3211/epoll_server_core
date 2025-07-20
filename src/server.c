@@ -1,3 +1,4 @@
+#define _POSIX_C_SOURCE 200809L
 #include "server.h"
 #include <stdio.h>
 #include <sys/socket.h>
@@ -12,9 +13,13 @@
 #include "logger.h"
 #include "config.h"
 #include <stdlib.h>
+#include <strings.h> // For strcasecmp
 
 #define MAX_EVENTS 64
 #define INITIAL_BUF_SIZE 4096
+
+// Forward declaration
+static void handleConnection(Connection* conn, ServerConfig* config, int epollFd);
 
 static int setNonBlocking(int fd) {
     int flags = fcntl(fd, F_GETFL, 0);
@@ -134,6 +139,9 @@ void startServer(const char* configFilePath) {
                     conn->read_buf_size = INITIAL_BUF_SIZE;
                     conn->read_buf = (char*)malloc(conn->read_buf_size);
                     conn->read_len = 0;
+                    conn->parsing_state = PARSE_STATE_REQ_LINE;
+                    conn->parsed_offset = 0;
+                    memset(&conn->request, 0, sizeof(HttpRequest));
                     
                     struct epoll_event client_event;
                     client_event.data.ptr = conn;
@@ -142,39 +150,7 @@ void startServer(const char* configFilePath) {
                 }
             } else if (events[i].events & EPOLLIN) {
                 Connection* conn = (Connection*)events[i].data.ptr;
-                char temp_buf[4096];
-                ssize_t bytesRead;
-
-                while ((bytesRead = read(conn->fd, temp_buf, sizeof(temp_buf))) > 0) {
-                    if (conn->read_len + bytesRead > conn->read_buf_size) {
-                        conn->read_buf_size *= 2;
-                        conn->read_buf = (char*)realloc(conn->read_buf, conn->read_buf_size);
-                    }
-                    memcpy(conn->read_buf + conn->read_len, temp_buf, bytesRead);
-                    conn->read_len += bytesRead;
-                }
-
-                if (bytesRead == 0 || (bytesRead < 0 && errno != EAGAIN)) {
-                    close(conn->fd);
-                    free(conn->read_buf);
-                    free(conn);
-                    continue;
-                }
-                
-                // Check for end of headers
-                char* header_end = strstr(conn->read_buf, "\r\n\r\n");
-                if (header_end) {
-                    HttpRequest req;
-                    if (parseHttpRequest(conn->read_buf, conn->read_len, &req) == 0) {
-                        log_system(LOG_INFO, "Parsed Request: Method=%s, URI=%s", req.method, req.uri);
-                        handleStaticRequest(conn->fd, req.uri, &config);
-                        freeHttpRequest(&req);
-                    }
-                    // For simplicity, we close connection after one request.
-                    close(conn->fd);
-                    free(conn->read_buf);
-                    free(conn);
-                }
+                handleConnection(conn, &config, epollFd);
             } else {
                 // Handle other events like EPOLLRDHUP, EPOLLERR
                 Connection* conn = (Connection*)events[i].data.ptr;
@@ -188,4 +164,123 @@ void startServer(const char* configFilePath) {
     close(epollFd);
     close(listenFd);
     logger_shutdown();
+}
+
+static void handleConnection(Connection* conn, ServerConfig* config, int epollFd) {
+    // 1. Read data from socket into connection buffer
+    char temp_buf[4096];
+    ssize_t bytesRead;
+    while ((bytesRead = read(conn->fd, temp_buf, sizeof(temp_buf))) > 0) {
+        if (conn->read_len + bytesRead > conn->read_buf_size) {
+            conn->read_buf_size *= 2;
+            conn->read_buf = (char*)realloc(conn->read_buf, conn->read_buf_size);
+        }
+        memcpy(conn->read_buf + conn->read_len, temp_buf, bytesRead);
+        conn->read_len += bytesRead;
+    }
+
+    if (bytesRead == 0 || (bytesRead < 0 && errno != EAGAIN)) {
+        close(conn->fd);
+        free(conn->read_buf);
+        free(conn);
+        return;
+    }
+
+    // 2. Try to parse the request incrementally
+    // All state is now in the conn struct, no local HttpRequest needed.
+    
+    // State: PARSE_REQ_LINE
+    if (conn->parsing_state == PARSE_STATE_REQ_LINE) {
+        // We search from the start of the unprocessed part of the buffer
+        char* line_end = strstr(conn->read_buf + conn->parsed_offset, "\r\n");
+        if (line_end) {
+            size_t line_len = line_end - (conn->read_buf + conn->parsed_offset);
+            char line_buf[line_len + 1];
+            memcpy(line_buf, conn->read_buf + conn->parsed_offset, line_len);
+            line_buf[line_len] = '\0';
+            
+            char* saveptr;
+            conn->request.method = strdup(strtok_r(line_buf, " ", &saveptr));
+            conn->request.uri = strdup(strtok_r(NULL, " ", &saveptr));
+            
+            if (conn->request.method && conn->request.uri) {
+                log_system(LOG_DEBUG, "Parsed request line: %s %s", conn->request.method, conn->request.uri);
+                conn->parsing_state = PARSE_STATE_HEADERS;
+                conn->parsed_offset += line_len + 2; // +2 for \r\n
+            } else { // Malformed
+                 // error handling...
+            }
+        }
+    }
+
+    // State: PARSE_HEADERS
+    if (conn->parsing_state == PARSE_STATE_HEADERS) {
+        char* start = conn->read_buf + conn->parsed_offset;
+        char* end = conn->read_buf + conn->read_len;
+        
+        while (start < end && conn->request.header_count < MAX_HEADERS) {
+            char* line_end = strstr(start, "\r\n");
+            if (!line_end) break; // Incomplete line
+
+            if (line_end == start) { // Empty line, marks end of headers
+                conn->parsed_offset = (line_end - conn->read_buf) + 2;
+                log_system(LOG_DEBUG, "Parsed headers. Content-Length: %zu", conn->request.content_length);
+                conn->parsing_state = (conn->request.content_length > 0) ? PARSE_STATE_BODY : PARSE_STATE_COMPLETE;
+                goto PARSE_BODY_STATE; // Use goto to jump to the next state check immediately
+            }
+
+            char* colon = memchr(start, ':', line_end - start);
+            if (colon) {
+                // Parse Key
+                char key_buf[colon - start + 1];
+                memcpy(key_buf, start, colon - start);
+                key_buf[colon - start] = '\0';
+                conn->request.headers[conn->request.header_count].key = strdup(key_buf);
+
+                // Parse Value
+                char* value_start = colon + 1;
+                while (*value_start == ' ') value_start++; // Trim leading spaces
+                char value_buf[line_end - value_start + 1];
+                memcpy(value_buf, value_start, line_end - value_start);
+                value_buf[line_end - value_start] = '\0';
+                conn->request.headers[conn->request.header_count].value = strdup(value_buf);
+
+                if (strcasecmp(conn->request.headers[conn->request.header_count].key, "Content-Length") == 0) {
+                    conn->request.content_length = atol(conn->request.headers[conn->request.header_count].value);
+                }
+                conn->request.header_count++;
+            }
+            start = line_end + 2; // Move to the next line
+        }
+    }
+
+PARSE_BODY_STATE:
+    // State: PARSE_BODY
+    if (conn->parsing_state == PARSE_STATE_BODY) {
+        if (conn->read_len >= conn->parsed_offset + conn->request.content_length) {
+            conn->request.body = conn->read_buf + conn->parsed_offset;
+            log_system(LOG_DEBUG, "Request body received.");
+            conn->parsing_state = PARSE_STATE_COMPLETE;
+        }
+    }
+
+    // 3. If a full request is parsed, handle it
+    if (conn->parsing_state == PARSE_STATE_COMPLETE) {
+        log_system(LOG_INFO, "Handling complete request: %s %s", conn->request.method, conn->request.uri);
+        
+        if (strcmp(conn->request.method, "GET") == 0) {
+            handleStaticRequest(conn->fd, conn->request.uri, config);
+        } else {
+            // Later, a router will handle POST, etc.
+            char response[] = "HTTP/1.1 501 Not Implemented\r\nConnection: close\r\n\r\nNot Implemented";
+            write(conn->fd, response, sizeof(response) - 1);
+        }
+
+        freeHttpRequest(&conn->request);
+        
+        // For now, close connection after handling
+        close(conn->fd);
+        free(conn->read_buf);
+        free(conn);
+    }
 } 
