@@ -1,6 +1,8 @@
 #ifndef SERVER_H
 #define SERVER_H
 
+#include <netinet/in.h> // For INET_ADDRSTRLEN
+
 /**
  * @brief Starts the web server.
  *

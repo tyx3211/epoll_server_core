@@ -2,6 +2,7 @@
 #define HTTP_H
 
 #include <stddef.h>
+#include <netinet/in.h> // For INET_ADDRSTRLEN
 #include "config.h" // For ServerConfig
 
 typedef enum {
@@ -21,7 +22,11 @@ typedef struct {
 // Represents a parsed HTTP request
 typedef struct {
     char* method;
-    char* uri;
+    char* raw_uri; // The original, undecoded URI
+    char* uri;     // The URL-decoded URI path (without query string)
+    char* raw_query_string; // The original, undecoded query string
+    char* query_string; // The URL-decoded query string
+
     HttpHeader headers[MAX_HEADERS];
     int header_count;
     char* body;
@@ -31,6 +36,7 @@ typedef struct {
 // Represents a single client connection
 typedef struct Connection {
     int fd;
+    char client_ip[INET_ADDRSTRLEN];
     char* read_buf;      // Dynamically allocated buffer for the request
     size_t read_buf_size; // Current allocated size of read_buf
     size_t read_len;      // Current length of data in read_buf
@@ -51,9 +57,9 @@ int parseHttpRequest(char* requestStr, size_t requestLen, HttpRequest* req);
 void freeHttpRequest(HttpRequest* req);
 
 // Returns the MIME type for a given file path.
-const char* getMimeType(const char* path);
+// const char* getMimeType(const char* path); // This is now in utils.h
 
 // Handles a request for a static file.
-void handleStaticRequest(int fd, const char* uri, const ServerConfig* config);
+void handleStaticRequest(Connection* conn, const ServerConfig* config);
 
 #endif // HTTP_H 

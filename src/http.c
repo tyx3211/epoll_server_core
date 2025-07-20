@@ -14,6 +14,7 @@
 #include "config.h"
 #include <ctype.h>
 #include <strings.h>
+#include "utils.h"
 
 #define MAX_PATH_LEN 256
 
@@ -40,44 +41,25 @@ int parseHttpRequest(char* requestStr, size_t requestLen, HttpRequest* req) {
 void freeHttpRequest(HttpRequest* req) {
     if (req) {
         free(req->method);
+        free(req->raw_uri);
         free(req->uri);
+        free(req->raw_query_string);
+        free(req->query_string);
         for (int i = 0; i < req->header_count; i++) {
             free(req->headers[i].key);
             free(req->headers[i].value);
         }
-        req->method = NULL;
-        req->uri = NULL;
+        // Use memset to be safe, especially since this struct is part of another struct
+        memset(req, 0, sizeof(HttpRequest));
     }
 }
 
-const char* getMimeType(const char* path) {
-    const char* dot = strrchr(path, '.');
-    if (!dot) {
-        return "application/octet-stream";
-    }
-    if (strcmp(dot, ".html") == 0) {
-        return "text/html";
-    }
-    if (strcmp(dot, ".css") == 0) {
-        return "text/css";
-    }
-    if (strcmp(dot, ".js") == 0) {
-        return "application/javascript";
-    }
-    if (strcmp(dot, ".jpg") == 0 || strcmp(dot, ".jpeg") == 0) {
-        return "image/jpeg";
-    }
-    if (strcmp(dot, ".png") == 0) {
-        return "image/png";
-    }
-    if (strcmp(dot, ".gif") == 0) {
-        return "image/gif";
-    }
-    return "application/octet-stream";
-}
-
-void handleStaticRequest(int fd, const char* uri, const ServerConfig* config) {
+void handleStaticRequest(Connection* conn, const ServerConfig* config) {
     char path[MAX_PATH_LEN];
+
+    const char* uri = conn->request.uri;
+    const int fd = conn->fd;
+
     if (strcmp(uri, "/") == 0) {
         snprintf(path, sizeof(path), "%s/index.html", config->document_root);
     } else {
@@ -86,7 +68,7 @@ void handleStaticRequest(int fd, const char* uri, const ServerConfig* config) {
 
     // Security check: simple but effective check for path traversal.
     if (strstr(path, "../") != NULL) {
-        log_access(NULL, uri, "GET", 403);
+        log_access(conn->client_ip, "GET", uri, 403);
         char response[] = "HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\nForbidden";
         write(fd, response, sizeof(response) - 1);
         return;
@@ -95,12 +77,12 @@ void handleStaticRequest(int fd, const char* uri, const ServerConfig* config) {
     int fileFd = open(path, O_RDONLY);
     if (fileFd == -1) {
         if (errno == ENOENT) {
-            log_access(NULL, uri, "GET", 404);
+            log_access(conn->client_ip, "GET", uri, 404);
             // Send 404 Not Found
             char response[] = "HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\nNot Found";
             write(fd, response, sizeof(response) - 1);
         } else {
-            log_access(NULL, uri, "GET", 403);
+            log_access(conn->client_ip, "GET", uri, 403);
             // Send 403 Forbidden for other errors like permission denied
             char response[] = "HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\nForbidden";
             write(fd, response, sizeof(response) - 1);
@@ -115,7 +97,7 @@ void handleStaticRequest(int fd, const char* uri, const ServerConfig* config) {
         return;
     }
 
-    log_access(NULL, uri, "GET", 200);
+    log_access(conn->client_ip, "GET", uri, 200);
 
     char header[512];
     int headerLen = snprintf(header, sizeof(header),
@@ -126,11 +108,14 @@ void handleStaticRequest(int fd, const char* uri, const ServerConfig* config) {
                              getMimeType(path), fileStat.st_size);
     write(fd, header, headerLen);
 
-    // Send file content
-    char buffer[4096];
-    ssize_t bytesRead;
-    while ((bytesRead = read(fileFd, buffer, sizeof(buffer))) > 0) {
-        write(fd, buffer, bytesRead);
+    // For HEAD requests, we only send the header.
+    if (strcasecmp(conn->request.method, "GET") == 0) {
+        // Send file content
+        char buffer[4096];
+        ssize_t bytesRead;
+        while ((bytesRead = read(fileFd, buffer, sizeof(buffer))) > 0) {
+            write(fd, buffer, bytesRead);
+        }
     }
 
     close(fileFd);

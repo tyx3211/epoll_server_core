@@ -14,6 +14,7 @@
 #include "config.h"
 #include <stdlib.h>
 #include <strings.h> // For strcasecmp
+#include "utils.h"
 
 #define MAX_EVENTS 64
 #define INITIAL_BUF_SIZE 4096
@@ -126,7 +127,10 @@ void startServer(const char* configFilePath) {
         for (int i = 0; i < n; i++) {
             if (events[i].data.fd == listenFd) {
                 while (1) {
-                    int connFd = accept(listenFd, NULL, NULL);
+                    struct sockaddr_in client_addr;
+                    socklen_t client_len = sizeof(client_addr);
+                    int connFd = accept(listenFd, (struct sockaddr*)&client_addr, &client_len);
+
                     if (connFd == -1) {
                         if (errno == EAGAIN || errno == EWOULDBLOCK) break;
                         log_system(LOG_ERROR, "accept: %s", strerror(errno));
@@ -136,6 +140,7 @@ void startServer(const char* configFilePath) {
                     
                     Connection* conn = (Connection*)malloc(sizeof(Connection));
                     conn->fd = connFd;
+                    inet_ntop(AF_INET, &client_addr.sin_addr, conn->client_ip, sizeof(conn->client_ip));
                     conn->read_buf_size = INITIAL_BUF_SIZE;
                     conn->read_buf = (char*)malloc(conn->read_buf_size);
                     conn->read_len = 0;
@@ -201,13 +206,31 @@ static void handleConnection(Connection* conn, ServerConfig* config, int epollFd
             
             char* saveptr;
             conn->request.method = strdup(strtok_r(line_buf, " ", &saveptr));
-            conn->request.uri = strdup(strtok_r(NULL, " ", &saveptr));
+            char* full_uri = strtok_r(NULL, " ", &saveptr);
             
-            if (conn->request.method && conn->request.uri) {
+            if (conn->request.method && full_uri) {
+                // conn->request.raw_uri = strdup(full_uri);
+                
+                // Separate URI path and query string
+                char* query_start = strchr(full_uri, '?');
+                if (query_start) {
+                    *query_start = '\0'; // Split the string
+                    conn->request.raw_uri = strdup(full_uri);
+                    conn->request.uri = urlDecode(full_uri);
+                    conn->request.raw_query_string = strdup(query_start + 1);
+                    conn->request.query_string = urlDecode(query_start + 1);
+                } else {
+                    conn->request.raw_uri = strdup(full_uri);
+                    conn->request.uri = urlDecode(full_uri);
+                    conn->request.raw_query_string = NULL;
+                    conn->request.query_string = NULL;
+                }
+                
                 log_system(LOG_DEBUG, "Parsed request line: %s %s", conn->request.method, conn->request.uri);
                 conn->parsing_state = PARSE_STATE_HEADERS;
                 conn->parsed_offset += line_len + 2; // +2 for \r\n
             } else { // Malformed
+                 free(conn->request.method);
                  // error handling...
             }
         }
@@ -226,7 +249,7 @@ static void handleConnection(Connection* conn, ServerConfig* config, int epollFd
                 conn->parsed_offset = (line_end - conn->read_buf) + 2;
                 log_system(LOG_DEBUG, "Parsed headers. Content-Length: %zu", conn->request.content_length);
                 conn->parsing_state = (conn->request.content_length > 0) ? PARSE_STATE_BODY : PARSE_STATE_COMPLETE;
-                goto PARSE_BODY_STATE; // Use goto to jump to the next state check immediately
+                break; // <-- THE FIX: Exit header parsing loop
             }
 
             char* colon = memchr(start, ':', line_end - start);
@@ -251,15 +274,16 @@ static void handleConnection(Connection* conn, ServerConfig* config, int epollFd
                 conn->request.header_count++;
             }
             start = line_end + 2; // Move to the next line
+            conn->parsed_offset = start - conn->read_buf; // Also update offset here
         }
     }
 
-PARSE_BODY_STATE:
-    // State: PARSE_BODY
+    // Use a direct check instead of goto to simplify flow
     if (conn->parsing_state == PARSE_STATE_BODY) {
+        // Here we would handle reading the request body.
+        // For now, we will assume body is fully read if content_length is met
         if (conn->read_len >= conn->parsed_offset + conn->request.content_length) {
             conn->request.body = conn->read_buf + conn->parsed_offset;
-            log_system(LOG_DEBUG, "Request body received.");
             conn->parsing_state = PARSE_STATE_COMPLETE;
         }
     }
@@ -267,20 +291,23 @@ PARSE_BODY_STATE:
     // 3. If a full request is parsed, handle it
     if (conn->parsing_state == PARSE_STATE_COMPLETE) {
         log_system(LOG_INFO, "Handling complete request: %s %s", conn->request.method, conn->request.uri);
-        
-        if (strcmp(conn->request.method, "GET") == 0) {
-            handleStaticRequest(conn->fd, conn->request.uri, config);
+        if (strcasecmp(conn->request.method, "GET") == 0 || strcasecmp(conn->request.method, "HEAD") == 0) {
+            handleStaticRequest(conn, config);
         } else {
-            // Later, a router will handle POST, etc.
+            // For now, only GET is supported for static files.
+            // Later, this will route to API handlers.
             char response[] = "HTTP/1.1 501 Not Implemented\r\nConnection: close\r\n\r\nNot Implemented";
             write(conn->fd, response, sizeof(response) - 1);
+            log_access(conn->client_ip, conn->request.method, conn->request.raw_uri, 501);
         }
 
-        freeHttpRequest(&conn->request);
-        
-        // For now, close connection after handling
+        // Clean up for next request on this connection (if keep-alive)
+        // For now, we just close. A proper implementation would reset state.
         close(conn->fd);
+        freeHttpRequest(&conn->request);
         free(conn->read_buf);
         free(conn);
+        // We have to set the pointer in epoll's data to NULL, but that's complex.
+        // For now, a new connection will be made by the client.
     }
 } 
