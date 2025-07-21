@@ -15,6 +15,7 @@
 #include <ctype.h>
 #include <strings.h>
 #include "utils.h"
+#include "server.h" // For queue_data_for_writing
 
 #define MAX_PATH_LEN 256
 
@@ -54,11 +55,16 @@ void freeHttpRequest(HttpRequest* req) {
     }
 }
 
-void handleStaticRequest(Connection* conn, const ServerConfig* config) {
-    char path[MAX_PATH_LEN];
+void handleStaticRequest(Connection* conn, const ServerConfig* config, int epollFd) {
+    if (strcasecmp(conn->request.method, "GET") != 0 && strcasecmp(conn->request.method, "HEAD") != 0) {
+        char response[] = "HTTP/1.1 501 Not Implemented\r\nConnection: close\r\n\r\nNot Implemented";
+        queue_data_for_writing(conn, response, sizeof(response) - 1, epollFd);
+        log_access(conn->client_ip, conn->request.method, conn->request.raw_uri, 501);
+        return;
+    }
 
+    char path[MAX_PATH_LEN];
     const char* uri = conn->request.uri;
-    const int fd = conn->fd;
 
     if (strcmp(uri, "/") == 0) {
         snprintf(path, sizeof(path), "%s/index.html", config->document_root);
@@ -68,24 +74,22 @@ void handleStaticRequest(Connection* conn, const ServerConfig* config) {
 
     // Security check: simple but effective check for path traversal.
     if (strstr(path, "../") != NULL) {
-        log_access(conn->client_ip, "GET", uri, 403);
+        log_access(conn->client_ip, conn->request.method, uri, 403);
         char response[] = "HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\nForbidden";
-        write(fd, response, sizeof(response) - 1);
+        queue_data_for_writing(conn, response, sizeof(response) - 1, epollFd);
         return;
     }
 
     int fileFd = open(path, O_RDONLY);
     if (fileFd == -1) {
         if (errno == ENOENT) {
-            log_access(conn->client_ip, "GET", uri, 404);
-            // Send 404 Not Found
+            log_access(conn->client_ip, conn->request.method, uri, 404);
             char response[] = "HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\nNot Found";
-            write(fd, response, sizeof(response) - 1);
+            queue_data_for_writing(conn, response, sizeof(response) - 1, epollFd);
         } else {
-            log_access(conn->client_ip, "GET", uri, 403);
-            // Send 403 Forbidden for other errors like permission denied
+            log_access(conn->client_ip, conn->request.method, uri, 403);
             char response[] = "HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\nForbidden";
-            write(fd, response, sizeof(response) - 1);
+            queue_data_for_writing(conn, response, sizeof(response) - 1, epollFd);
         }
         return;
     }
@@ -97,7 +101,7 @@ void handleStaticRequest(Connection* conn, const ServerConfig* config) {
         return;
     }
 
-    log_access(conn->client_ip, "GET", uri, 200);
+    log_access(conn->client_ip, conn->request.method, uri, 200);
 
     char header[512];
     int headerLen = snprintf(header, sizeof(header),
@@ -106,7 +110,7 @@ void handleStaticRequest(Connection* conn, const ServerConfig* config) {
                              "Content-Type: %s\r\n"
                              "Content-Length: %ld\r\n\r\n",
                              getMimeType(path), fileStat.st_size);
-    write(fd, header, headerLen);
+    queue_data_for_writing(conn, header, headerLen, epollFd);
 
     // For HEAD requests, we only send the header.
     if (strcasecmp(conn->request.method, "GET") == 0) {
@@ -114,7 +118,7 @@ void handleStaticRequest(Connection* conn, const ServerConfig* config) {
         char buffer[4096];
         ssize_t bytesRead;
         while ((bytesRead = read(fileFd, buffer, sizeof(buffer))) > 0) {
-            write(fd, buffer, bytesRead);
+            queue_data_for_writing(conn, buffer, bytesRead, epollFd);
         }
     }
 

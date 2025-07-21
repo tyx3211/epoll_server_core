@@ -1,6 +1,8 @@
 #ifndef UTILS_H
 #define UTILS_H
 
+#include <sys/types.h> // For ssize_t, size_t
+
 /**
  * @brief Decodes a URL-encoded string.
  * The caller is responsible for freeing the returned string.

@@ -37,10 +37,18 @@ typedef struct {
 typedef struct Connection {
     int fd;
     char client_ip[INET_ADDRSTRLEN];
-    char* read_buf;      // Dynamically allocated buffer for the request
-    size_t read_buf_size; // Current allocated size of read_buf
-    size_t read_len;      // Current length of data in read_buf
-    
+
+    // Buffer for reading data
+    char* read_buf;
+    size_t read_buf_size;
+    size_t read_len;
+
+    // Buffer for writing data
+    char* write_buf;
+    size_t write_buf_size;
+    size_t write_len; // How much data is in the buffer
+    size_t write_pos; // How much has been sent
+
     // Parsing state
     ParsingState parsing_state;
     size_t parsed_offset; // How much of read_buf has been processed
@@ -60,6 +68,6 @@ void freeHttpRequest(HttpRequest* req);
 // const char* getMimeType(const char* path); // This is now in utils.h
 
 // Handles a request for a static file.
-void handleStaticRequest(Connection* conn, const ServerConfig* config);
+void handleStaticRequest(Connection* conn, const ServerConfig* config, int epollFd);
 
 #endif // HTTP_H 

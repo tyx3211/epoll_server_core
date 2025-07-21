@@ -2,6 +2,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+#include <errno.h> // Required for errno
+#include <unistd.h> // Required for write
 
 static int hex_to_int(char c) {
     if (c >= '0' && c <= '9') return c - '0';

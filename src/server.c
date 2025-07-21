@@ -15,12 +15,16 @@
 #include <stdlib.h>
 #include <strings.h> // For strcasecmp
 #include "utils.h"
+#include <stdbool.h>
 
 #define MAX_EVENTS 64
 #define INITIAL_BUF_SIZE 4096
 
-// Forward declaration
+// Forward declarations
 static void handleConnection(Connection* conn, ServerConfig* config, int epollFd);
+static void handleWrite(Connection* conn, ServerConfig* config, int epollFd);
+static void closeConnection(Connection* conn);
+void queue_data_for_writing(struct Connection* conn, const char* data, size_t len, int epollFd);
 
 static int setNonBlocking(int fd) {
     int flags = fcntl(fd, F_GETFL, 0);
@@ -144,6 +148,10 @@ void startServer(const char* configFilePath) {
                     conn->read_buf_size = INITIAL_BUF_SIZE;
                     conn->read_buf = (char*)malloc(conn->read_buf_size);
                     conn->read_len = 0;
+                    conn->write_buf = (char*)malloc(INITIAL_BUF_SIZE);
+                    conn->write_buf_size = INITIAL_BUF_SIZE;
+                    conn->write_len = 0;
+                    conn->write_pos = 0;
                     conn->parsing_state = PARSE_STATE_REQ_LINE;
                     conn->parsed_offset = 0;
                     memset(&conn->request, 0, sizeof(HttpRequest));
@@ -156,12 +164,13 @@ void startServer(const char* configFilePath) {
             } else if (events[i].events & EPOLLIN) {
                 Connection* conn = (Connection*)events[i].data.ptr;
                 handleConnection(conn, &config, epollFd);
+            } else if (events[i].events & EPOLLOUT) {
+                Connection* conn = (Connection*)events[i].data.ptr;
+                handleWrite(conn, &config, epollFd);
             } else {
                 // Handle other events like EPOLLRDHUP, EPOLLERR
                 Connection* conn = (Connection*)events[i].data.ptr;
-                close(conn->fd);
-                free(conn->read_buf);
-                free(conn);
+                closeConnection(conn);
             }
         }
     }
@@ -169,6 +178,69 @@ void startServer(const char* configFilePath) {
     close(epollFd);
     close(listenFd);
     logger_shutdown();
+}
+
+static void closeConnection(Connection* conn) {
+    if (conn) {
+        close(conn->fd);
+        freeHttpRequest(&conn->request);
+        free(conn->read_buf);
+        free(conn->write_buf);
+        free(conn);
+    }
+}
+
+static void handleWrite(Connection* conn, ServerConfig* config, int epollFd) {
+    if (conn->write_len == 0) {
+        // Nothing to write, weird. Unregister interest in EPOLLOUT.
+        struct epoll_event event;
+        event.data.ptr = conn;
+        event.events = EPOLLIN | EPOLLET | EPOLLRDHUP;
+        epoll_ctl(epollFd, EPOLL_CTL_MOD, conn->fd, &event);
+        return;
+    }
+
+    ssize_t nwritten = write(conn->fd, conn->write_buf + conn->write_pos, conn->write_len - conn->write_pos);
+
+    if (nwritten > 0) {
+        conn->write_pos += nwritten;
+        if (conn->write_pos == conn->write_len) {
+            // All data sent successfully
+            conn->write_pos = 0;
+            conn->write_len = 0;
+            // Unregister interest in EPOLLOUT and close the connection as we don't support keep-alive
+            closeConnection(conn); 
+        }
+        // If not all data was sent, we do nothing and wait for the next EPOLLOUT
+    } else {
+        if (errno != EAGAIN && errno != EWOULDBLOCK) {
+            log_system(LOG_ERROR, "write error on fd %d: %s", conn->fd, strerror(errno));
+            closeConnection(conn);
+        }
+        // If EAGAIN or EWOULDBLOCK, just wait for the next EPOLLOUT
+    }
+}
+
+void queue_data_for_writing(struct Connection* conn, const char* data, size_t len, int epollFd) {
+    // Check if buffer needs to be expanded
+    if (conn->write_len + len > conn->write_buf_size) {
+        size_t new_size = conn->write_buf_size;
+        while (conn->write_len + len > new_size) {
+            new_size *= 2;
+        }
+        conn->write_buf = (char*)realloc(conn->write_buf, new_size);
+        conn->write_buf_size = new_size;
+    }
+
+    // Append new data to the write buffer
+    memcpy(conn->write_buf + conn->write_len, data, len);
+    conn->write_len += len;
+
+    // Register interest in EPOLLOUT to start sending
+    struct epoll_event event;
+    event.data.ptr = conn;
+    event.events = EPOLLIN | EPOLLOUT | EPOLLET | EPOLLRDHUP;
+    epoll_ctl(epollFd, EPOLL_CTL_MOD, conn->fd, &event);
 }
 
 static void handleConnection(Connection* conn, ServerConfig* config, int epollFd) {
@@ -185,9 +257,7 @@ static void handleConnection(Connection* conn, ServerConfig* config, int epollFd
     }
 
     if (bytesRead == 0 || (bytesRead < 0 && errno != EAGAIN)) {
-        close(conn->fd);
-        free(conn->read_buf);
-        free(conn);
+        closeConnection(conn);
         return;
     }
 
@@ -291,23 +361,7 @@ static void handleConnection(Connection* conn, ServerConfig* config, int epollFd
     // 3. If a full request is parsed, handle it
     if (conn->parsing_state == PARSE_STATE_COMPLETE) {
         log_system(LOG_INFO, "Handling complete request: %s %s", conn->request.method, conn->request.uri);
-        if (strcasecmp(conn->request.method, "GET") == 0 || strcasecmp(conn->request.method, "HEAD") == 0) {
-            handleStaticRequest(conn, config);
-        } else {
-            // For now, only GET is supported for static files.
-            // Later, this will route to API handlers.
-            char response[] = "HTTP/1.1 501 Not Implemented\r\nConnection: close\r\n\r\nNot Implemented";
-            write(conn->fd, response, sizeof(response) - 1);
-            log_access(conn->client_ip, conn->request.method, conn->request.raw_uri, 501);
-        }
-
-        // Clean up for next request on this connection (if keep-alive)
-        // For now, we just close. A proper implementation would reset state.
-        close(conn->fd);
-        freeHttpRequest(&conn->request);
-        free(conn->read_buf);
-        free(conn);
-        // We have to set the pointer in epoll's data to NULL, but that's complex.
-        // For now, a new connection will be made by the client.
+        handleStaticRequest(conn, config, epollFd);
+        // The connection will be closed by handleWrite after all data is sent
     }
 } 
