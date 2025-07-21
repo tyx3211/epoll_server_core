@@ -18,7 +18,7 @@ void handle_api_login(Connection* conn, ServerConfig* config, int epollFd) {
         password = get_query_param(conn->request.body, "password");
     }
 
-    printf("username: %s, password: %s\n", username, password);
+    // printf("username: %s, password: %s\n", username, password);
 
     if (username && password) {
         log_system(LOG_INFO, "Login attempt: user=%s, pass=%s", username, password);

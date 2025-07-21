@@ -248,8 +248,9 @@ static void handleConnection(Connection* conn, ServerConfig* config, int epollFd
     // 1. Read data from socket into connection buffer
     char temp_buf[4096];
     ssize_t bytesRead;
+    // need space to add '\0'
     while ((bytesRead = read(conn->fd, temp_buf, sizeof(temp_buf))) > 0) {
-        if (conn->read_len + bytesRead > conn->read_buf_size) {
+        if (conn->read_len + bytesRead >= conn->read_buf_size) {
             conn->read_buf_size *= 2;
             conn->read_buf = (char*)realloc(conn->read_buf, conn->read_buf_size);
         }
@@ -355,6 +356,7 @@ static void handleConnection(Connection* conn, ServerConfig* config, int epollFd
         // For now, we will assume body is fully read if content_length is met
         if (conn->read_len >= conn->parsed_offset + conn->request.content_length) {
             conn->request.body = conn->read_buf + conn->parsed_offset;
+            conn->request.body[conn->request.content_length] = '\0';
             conn->parsing_state = PARSE_STATE_COMPLETE;
         }
     }
