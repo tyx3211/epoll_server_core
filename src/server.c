@@ -16,6 +16,7 @@
 #include <strings.h> // For strcasecmp
 #include "utils.h"
 #include <stdbool.h>
+#include "router.h" // Include our new router
 
 #define MAX_EVENTS 64
 #define INITIAL_BUF_SIZE 4096
@@ -361,7 +362,17 @@ static void handleConnection(Connection* conn, ServerConfig* config, int epollFd
     // 3. If a full request is parsed, handle it
     if (conn->parsing_state == PARSE_STATE_COMPLETE) {
         log_system(LOG_INFO, "Handling complete request: %s %s", conn->request.method, conn->request.uri);
-        handleStaticRequest(conn, config, epollFd);
+        
+        // --- Routing Logic ---
+        RouteHandler handler = router_find_handler(conn->request.method, conn->request.uri);
+        if (handler) {
+            // Found a matching API handler
+            log_system(LOG_DEBUG, "Routing to API handler for %s %s", conn->request.method, conn->request.uri);
+            handler(conn, config, epollFd);
+        } else {
+            // No API handler found, fall back to static file serving
+            handleStaticRequest(conn, config, epollFd);
+        }
         // The connection will be closed by handleWrite after all data is sent
     }
 } 

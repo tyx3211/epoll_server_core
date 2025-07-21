@@ -1,3 +1,5 @@
+#define _DEFAULT_SOURCE
+#define _POSIX_C_SOURCE 200809L
 #include "utils.h"
 #include <stdlib.h>
 #include <string.h>
@@ -68,5 +70,36 @@ const char* getMimeType(const char* path) {
     if (strcmp(dot, ".ico") == 0) {
         return "image/x-icon";
     }
-    return "application/octet-stream";
+    return "application/octet-stream"; // Default binary type
+}
+
+char* get_query_param(const char* str, const char* key) {
+    if (!str || !key) return NULL;
+    // We duplicate the string because strtok_r modifies it.
+    char* str_copy = strdup(str);
+    if (!str_copy) return NULL;
+
+    char* value = NULL;
+    char* saveptr;
+
+    char* token = strtok_r(str_copy, "&", &saveptr);
+    while (token != NULL) {
+        char* eq = strchr(token, '=');
+        if (eq) {
+            *eq = '\0'; // Split key and value
+            char* decoded_key = urlDecode(token);
+            if (strcmp(decoded_key, key) == 0) {
+                // Key matches, decode the value and store it
+                char* decoded_value = urlDecode(eq + 1);
+                value = strdup(decoded_value);
+                free(decoded_value);
+            }
+            free(decoded_key);
+            if (value) break; // Found, no need to continue
+        }
+        token = strtok_r(NULL, "&", &saveptr);
+    }
+
+    free(str_copy);
+    return value;
 }
