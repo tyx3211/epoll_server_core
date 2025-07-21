@@ -19,7 +19,8 @@
 
 #define MAX_PATH_LEN 256
 
-// Helper function to trim leading/trailing whitespace
+// Helper function to trim leading/trailing whitespace - NO LONGER USED
+/*
 static char* trim(char* str) {
     if (!str) return NULL;
     char* end;
@@ -30,9 +31,12 @@ static char* trim(char* str) {
     end[1] = '\0';
     return str;
 }
-
+*/
 
 int parseHttpRequest(char* requestStr, size_t requestLen, HttpRequest* req) {
+    (void)requestStr;
+    (void)requestLen;
+    (void)req;
     // This function is now deprecated and will be replaced by
     // an incremental parser in server.c.
     // Returning -1 to indicate it should not be used.
@@ -46,6 +50,7 @@ void freeHttpRequest(HttpRequest* req) {
         free(req->uri);
         free(req->raw_query_string);
         free(req->query_string);
+        free(req->authed_user);
         for (int i = 0; i < req->header_count; i++) {
             free(req->headers[i].key);
             free(req->headers[i].value);
@@ -109,7 +114,8 @@ void handleStaticRequest(Connection* conn, const ServerConfig* config, int epoll
                              "Connection: close\r\n"
                              "Content-Type: %s\r\n"
                              "Content-Length: %ld\r\n\r\n",
-                             getMimeType(path), fileStat.st_size);
+                             config->mime_enabled ? getMimeType(path) : "application/octet-stream", 
+                             fileStat.st_size);
     queue_data_for_writing(conn, header, headerLen, epollFd);
 
     // For HEAD requests, we only send the header.

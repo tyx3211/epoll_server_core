@@ -9,6 +9,11 @@ typedef struct {
     char log_path[256];
     LogLevel log_level;
     LogTarget log_target;
+    
+    // JWT and other settings
+    int jwt_enabled;
+    char jwt_secret[256];
+    int mime_enabled;
 } ServerConfig;
 
 /**

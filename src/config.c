@@ -25,6 +25,10 @@ void loadConfig(const char* filepath, ServerConfig* config) {
     strcpy(config->log_path, "log");
     config->log_level = LOG_INFO;
     config->log_target = LOG_TARGET_FILE;
+    // New defaults
+    config->jwt_enabled = 1;
+    strcpy(config->jwt_secret, "a-very-secret-and-long-key-that-is-at-least-32-bytes");
+    config->mime_enabled = 1;
 
     if (!filepath) {
         return; // Use defaults if no file path is provided
@@ -65,6 +69,12 @@ void loadConfig(const char* filepath, ServerConfig* config) {
         } else if (strcmp(key, "LogTarget") == 0) {
             if (strcmp(trimmed_value, "stdout") == 0) config->log_target = LOG_TARGET_STDOUT;
             else if (strcmp(trimmed_value, "file") == 0) config->log_target = LOG_TARGET_FILE;
+        } else if (strcmp(key, "JwtEnabled") == 0) {
+            config->jwt_enabled = atoi(trimmed_value);
+        } else if (strcmp(key, "JwtSecret") == 0) {
+            strcpy(config->jwt_secret, trimmed_value);
+        } else if (strcmp(key, "MimeEnabled") == 0) {
+            config->mime_enabled = atoi(trimmed_value);
         }
     }
 

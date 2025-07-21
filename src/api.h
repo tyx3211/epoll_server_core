@@ -1,7 +1,7 @@
 #ifndef API_H
 #define API_H
 
-#include "router.h" // Includes http.h and config.h
+#include "http.h" // Includes Connection and ServerConfig
 
 /**
  * @brief Handles the /api/login POST request.
@@ -14,5 +14,11 @@ void handle_api_login(Connection* conn, ServerConfig* config, int epollFd);
  * Implements the search logic described in the requirements.
  */
 void handle_api_search(Connection* conn, ServerConfig* config, int epollFd);
+
+/**
+ * @brief Handles the /api/me GET request.
+ * Returns information about the authenticated user.
+ */
+void handle_api_me(Connection* conn, ServerConfig* config, int epollFd);
 
 #endif // API_H 

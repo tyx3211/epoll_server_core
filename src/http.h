@@ -31,6 +31,10 @@ typedef struct {
     int header_count;
     char* body;
     size_t content_length;
+
+    // Fields for authentication
+    const char* auth_token; // Raw token from header
+    char* authed_user;      // Decoded username after validation
 } HttpRequest;
 
 // Represents a single client connection
