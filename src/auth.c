@@ -4,7 +4,9 @@
 #include <stdlib.h>
 #include <l8w8jwt/decode.h>
 #include <l8w8jwt/claim.h> // This is the missing header
+#include <l8w8jwt/encode.h> // Required for encoding functions
 #include "logger.h"
+#include <time.h> // Required for time()
 
 char* authenticate_request(Connection* conn, ServerConfig* config) {
     // 1. Find the Authorization header
@@ -64,4 +66,40 @@ char* authenticate_request(Connection* conn, ServerConfig* config) {
     }
 
     return username;
+}
+
+char* generate_token_for_user(const char* username, ServerConfig* config) {
+    if (!username) return NULL;
+
+    if (config->jwt_enabled) {
+        // --- Generate a real JWT ---
+        char* jwt = NULL;
+        size_t jwt_length;
+        struct l8w8jwt_encoding_params params;
+        l8w8jwt_encoding_params_init(&params);
+
+        params.alg = L8W8JWT_ALG_HS256;
+        params.sub = (char*)username;
+        params.iss = "my-web-server";
+        params.iat = time(NULL);
+        params.exp = time(NULL) + (15 * 60);
+        params.secret_key = (unsigned char*)config->jwt_secret;
+        params.secret_key_length = strlen(config->jwt_secret);
+        params.out = &jwt;
+        params.out_length = &jwt_length;
+        
+        int r = l8w8jwt_encode(&params);
+        if (r == L8W8JWT_SUCCESS && jwt) {
+            // The library allocates memory for jwt, which we pass on to the caller.
+            // The caller (api.c) is responsible for building the JSON and freeing this.
+            return jwt; 
+        } else {
+            log_system(LOG_ERROR, "Failed to create JWT token: %d", r);
+            l8w8jwt_free(jwt); // Free any partial allocation
+            return NULL;
+        }
+    } else {
+        // --- Generate a mock token (just the username) ---
+        return strdup(username);
+    }
 } 

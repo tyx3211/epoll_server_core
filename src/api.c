@@ -55,45 +55,15 @@ void handle_api_login(Connection* conn, ServerConfig* config, int epollFd) {
         }
         
         if (credentials_valid) {
-            // --- JWT Generation or Mock Token ---
-            if (config->jwt_enabled) {
-                char* jwt = NULL;
-                size_t jwt_length;
-                struct l8w8jwt_encoding_params params;
-                l8w8jwt_encoding_params_init(&params);
-
-                params.alg = L8W8JWT_ALG_HS256;
-
-                params.sub = username; // Subject of the token is the user
-                params.iss = "my-web-server";
-
-                params.iat = time(NULL);
-                params.exp = time(NULL) + (15 * 60); // Expires in 15 minutes
-
-                params.secret_key = (unsigned char*)config->jwt_secret;
-                params.secret_key_length = strlen(config->jwt_secret);
-
-                params.out = &jwt;
-                params.out_length = &jwt_length;
-                
-                int r = l8w8jwt_encode(&params);
-                if (r == L8W8JWT_SUCCESS && jwt) {
-                    char json_response[1024];
-                    snprintf(json_response, sizeof(json_response),
-                             "{\"status\":\"success\", \"token\":\"%s\"}", jwt);
-                    response_body = strdup(json_response); // Duplicate it as it's on the stack
-                } else {
-                    log_system(LOG_ERROR, "Failed to create JWT token: %d", r);
-                    response_body = "{\"status\":\"error\", \"message\":\"Internal server error: could not create token.\"}";
-                }
-
-                l8w8jwt_free(jwt); // Free the token created by the library
-            } else {
-                // JWT is disabled, return username as a mock token
+            char* token_str = generate_token_for_user(username, config);
+            if (token_str) {
                 char json_response[1024];
                 snprintf(json_response, sizeof(json_response),
-                         "{\"status\":\"success\", \"token\":\"%s\"}", username);
+                         "{\"status\":\"success\", \"token\":\"%s\"}", token_str);
                 response_body = strdup(json_response);
+                free(token_str);
+            } else {
+                response_body = "{\"status\":\"error\", \"message\":\"Internal server error: could not create token.\"}";
             }
         } else {
             response_body = "{\"status\":\"error\", \"message\":\"Invalid credentials.\"}";
@@ -113,8 +83,8 @@ void handle_api_login(Connection* conn, ServerConfig* config, int epollFd) {
     queue_data_for_writing(conn, header, headerLen, epollFd);
     queue_data_for_writing(conn, response_body, strlen(response_body), epollFd);
 
-    // If we duplicated the response body, we need to free it
-    if (credentials_valid) { // This condition is fine, strdup was used in both jwt and mock paths
+    // Free the response_body ONLY if it was dynamically allocated by strdup
+    if (credentials_valid) {
         free((void*)response_body);
     }
 

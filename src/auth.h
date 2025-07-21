@@ -20,4 +20,18 @@
  */
 char* authenticate_request(Connection* conn, ServerConfig* config);
 
+/**
+ * @brief Generates a token for a given user.
+ * 
+ * This function encapsulates the logic for creating either a real JWT or a mock token,
+ * based on the server's configuration (jwt_enabled).
+ * 
+ * @param username The username for whom to generate the token.
+ * @param config The server configuration, containing JWT settings.
+ * @return A dynamically allocated string containing the token (caller must free).
+ *         Returns NULL on failure.
+ */
+char* generate_token_for_user(const char* username, ServerConfig* config);
+
+
 #endif // AUTH_H 
