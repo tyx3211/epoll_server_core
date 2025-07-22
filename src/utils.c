@@ -6,6 +6,7 @@
 #include <ctype.h>
 #include <errno.h> // Required for errno
 #include <unistd.h> // Required for write
+#include "logger.h" // Include logger for debug messages
 
 static int hex_to_int(char c) {
     if (c >= '0' && c <= '9') return c - '0';
@@ -33,6 +34,7 @@ char* urlDecode(const char* str) {
                 i += 2;
             } else {
                 // Invalid hex sequence, copy as is
+                log_system(LOG_DEBUG, "Utils: Invalid hex sequence '%%%c%c' in urlDecode.", str[i+1], str[i+2]);
                 decoded[decoded_len++] = str[i];
             }
         } else {
@@ -47,6 +49,7 @@ char* urlDecode(const char* str) {
 const char* getMimeType(const char* path) {
     const char* dot = strrchr(path, '.');
     if (!dot) {
+        log_system(LOG_DEBUG, "Utils: No file extension found for '%s', defaulting to octet-stream.", path);
         return "application/octet-stream";
     }
     if (strcmp(dot, ".html") == 0) {
@@ -70,11 +73,13 @@ const char* getMimeType(const char* path) {
     if (strcmp(dot, ".ico") == 0) {
         return "image/x-icon";
     }
+    log_system(LOG_DEBUG, "Utils: Unknown file extension '%s' for path '%s', defaulting to octet-stream.", dot, path);
     return "application/octet-stream"; // Default binary type
 }
 
 char* get_query_param(const char* str, const char* key) {
     if (!str || !key) return NULL;
+    log_system(LOG_DEBUG, "Utils: Parsing query string for key '%s'.", key);
     // We duplicate the string because strtok_r modifies it.
     char* str_copy = strdup(str);
     if (!str_copy) return NULL;
@@ -92,6 +97,7 @@ char* get_query_param(const char* str, const char* key) {
                 // Key matches, decode the value and store it
                 char* decoded_value = urlDecode(eq + 1);
                 value = strdup(decoded_value);
+                log_system(LOG_DEBUG, "Utils: Found key '%s' with value '%s'.", key, value);
                 free(decoded_value);
             }
             free(decoded_key);

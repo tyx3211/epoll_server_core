@@ -31,6 +31,7 @@ void loadConfig(const char* filepath, ServerConfig* config) {
     config->mime_enabled = 1;
 
     if (!filepath) {
+        log_system(LOG_INFO, "Config: No config file provided, using default settings.");
         return; // Use defaults if no file path is provided
     }
 
@@ -38,10 +39,12 @@ void loadConfig(const char* filepath, ServerConfig* config) {
     if (!fp) {
         // This is not a fatal error, just means we use defaults.
         // We might want to log this at a WARNING level once the logger is initialized.
+        log_system(LOG_WARNING, "Config: Could not open config file '%s'. Using default settings.", filepath);
         return;
     }
 
     char line[512];
+    log_system(LOG_DEBUG, "Config: Reading configuration from '%s'.", filepath);
     while (fgets(line, sizeof(line), fp)) {
         // Skip comments and empty lines
         if (line[0] == '#' || line[0] == '\n' || line[0] == '\r') {
@@ -57,24 +60,32 @@ void loadConfig(const char* filepath, ServerConfig* config) {
 
         if (strcmp(key, "ListenPort") == 0) {
             config->listen_port = atoi(trimmed_value);
+            log_system(LOG_DEBUG, "Config: Set %s = %d", key, config->listen_port);
         } else if (strcmp(key, "DocumentRoot") == 0) {
             strcpy(config->document_root, trimmed_value);
+            log_system(LOG_DEBUG, "Config: Set %s = %s", key, config->document_root);
         } else if (strcmp(key, "LogPath") == 0) {
             strcpy(config->log_path, trimmed_value);
+            log_system(LOG_DEBUG, "Config: Set %s = %s", key, config->log_path);
         } else if (strcmp(key, "LogLevel") == 0) {
             if (strcmp(trimmed_value, "DEBUG") == 0) config->log_level = LOG_DEBUG;
             else if (strcmp(trimmed_value, "INFO") == 0) config->log_level = LOG_INFO;
             else if (strcmp(trimmed_value, "WARNING") == 0) config->log_level = LOG_WARNING;
             else if (strcmp(trimmed_value, "ERROR") == 0) config->log_level = LOG_ERROR;
+            log_system(LOG_DEBUG, "Config: Set %s = %s", key, trimmed_value);
         } else if (strcmp(key, "LogTarget") == 0) {
             if (strcmp(trimmed_value, "stdout") == 0) config->log_target = LOG_TARGET_STDOUT;
             else if (strcmp(trimmed_value, "file") == 0) config->log_target = LOG_TARGET_FILE;
+            log_system(LOG_DEBUG, "Config: Set %s = %s", key, trimmed_value);
         } else if (strcmp(key, "JwtEnabled") == 0) {
             config->jwt_enabled = atoi(trimmed_value);
+            log_system(LOG_DEBUG, "Config: Set %s = %d", key, config->jwt_enabled);
         } else if (strcmp(key, "JwtSecret") == 0) {
             strcpy(config->jwt_secret, trimmed_value);
+            log_system(LOG_DEBUG, "Config: Set %s = [SECRET]", key);
         } else if (strcmp(key, "MimeEnabled") == 0) {
             config->mime_enabled = atoi(trimmed_value);
+            log_system(LOG_DEBUG, "Config: Set %s = %d", key, config->mime_enabled);
         }
     }
 

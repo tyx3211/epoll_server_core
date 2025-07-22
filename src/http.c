@@ -61,25 +61,31 @@ void freeHttpRequest(HttpRequest* req) {
 }
 
 void handleStaticRequest(Connection* conn, const ServerConfig* config, int epollFd) {
-    if (strcasecmp(conn->request.method, "GET") != 0 && strcasecmp(conn->request.method, "HEAD") != 0) {
+    const char* method = conn->request.method;
+    const char* uri = conn->request.uri;
+    
+    if (strcasecmp(method, "GET") != 0 && strcasecmp(method, "HEAD") != 0) {
+        log_system(LOG_DEBUG, "Static: Received unsupported method '%s' for URI '%s'", method, uri);
         char response[] = "HTTP/1.1 501 Not Implemented\r\nConnection: close\r\n\r\nNot Implemented";
         queue_data_for_writing(conn, response, sizeof(response) - 1, epollFd);
-        log_access(conn->client_ip, conn->request.method, conn->request.raw_uri, 501);
+        log_access(conn->client_ip, method, conn->request.raw_uri, 501);
         return;
     }
+    log_system(LOG_DEBUG, "Static: Handling %s request for URI '%s'", method, uri);
 
     char path[MAX_PATH_LEN];
-    const char* uri = conn->request.uri;
 
     if (strcmp(uri, "/") == 0) {
         snprintf(path, sizeof(path), "%s/index.html", config->document_root);
     } else {
         snprintf(path, sizeof(path), "%s%s", config->document_root, uri);
     }
+    log_system(LOG_DEBUG, "Static: Resolved file path to '%s'", path);
 
     // Security check: simple but effective check for path traversal.
     if (strstr(path, "../") != NULL) {
-        log_access(conn->client_ip, conn->request.method, uri, 403);
+        log_system(LOG_WARNING, "Static: Path traversal attempt blocked for URI '%s'", uri);
+        log_access(conn->client_ip, method, uri, 403);
         char response[] = "HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\nForbidden";
         queue_data_for_writing(conn, response, sizeof(response) - 1, epollFd);
         return;
@@ -87,12 +93,13 @@ void handleStaticRequest(Connection* conn, const ServerConfig* config, int epoll
 
     int fileFd = open(path, O_RDONLY);
     if (fileFd == -1) {
+        log_system(LOG_DEBUG, "Static: Failed to open file '%s'. errno: %d (%s)", path, errno, strerror(errno));
         if (errno == ENOENT) {
-            log_access(conn->client_ip, conn->request.method, uri, 404);
+            log_access(conn->client_ip, method, uri, 404);
             char response[] = "HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\nNot Found";
             queue_data_for_writing(conn, response, sizeof(response) - 1, epollFd);
         } else {
-            log_access(conn->client_ip, conn->request.method, uri, 403);
+            log_access(conn->client_ip, method, uri, 403);
             char response[] = "HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\nForbidden";
             queue_data_for_writing(conn, response, sizeof(response) - 1, epollFd);
         }
@@ -103,10 +110,17 @@ void handleStaticRequest(Connection* conn, const ServerConfig* config, int epoll
     if (fstat(fileFd, &fileStat) == -1) {
         log_system(LOG_ERROR, "fstat error on %s: %s", path, strerror(errno));
         close(fileFd);
+        // Let's send a 500 error to the client
+        char response[] = "HTTP/1.1 500 Internal Server Error\r\nConnection: close\r\n\r\nInternal Server Error";
+        queue_data_for_writing(conn, response, sizeof(response) - 1, epollFd);
+        log_access(conn->client_ip, method, uri, 500);
         return;
     }
 
-    log_access(conn->client_ip, conn->request.method, uri, 200);
+    log_access(conn->client_ip, method, uri, 200);
+
+    const char* mime_type = config->mime_enabled ? getMimeType(path) : "application/octet-stream";
+    log_system(LOG_DEBUG, "Static: Serving file '%s' (%ld bytes) with MIME type '%s'", path, fileStat.st_size, mime_type);
 
     char header[512];
     int headerLen = snprintf(header, sizeof(header),
@@ -114,12 +128,12 @@ void handleStaticRequest(Connection* conn, const ServerConfig* config, int epoll
                              "Connection: close\r\n"
                              "Content-Type: %s\r\n"
                              "Content-Length: %ld\r\n\r\n",
-                             config->mime_enabled ? getMimeType(path) : "application/octet-stream", 
+                             mime_type, 
                              fileStat.st_size);
     queue_data_for_writing(conn, header, headerLen, epollFd);
 
     // For HEAD requests, we only send the header.
-    if (strcasecmp(conn->request.method, "GET") == 0) {
+    if (strcasecmp(method, "GET") == 0) {
         // Send file content
         char buffer[4096];
         ssize_t bytesRead;

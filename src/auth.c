@@ -26,6 +26,8 @@ char* authenticate_request(Connection* conn, ServerConfig* config) {
     const char* token = auth_header + 7;
     char* username = NULL;
 
+    log_system(LOG_DEBUG, "Auth: Attempting to validate token.");
+
     if (config->jwt_enabled) {
         // --- Validate real JWT ---
         struct l8w8jwt_decoding_params params;
@@ -47,6 +49,7 @@ char* authenticate_request(Connection* conn, ServerConfig* config) {
             if (sub_claim && sub_claim->type == L8W8JWT_CLAIM_TYPE_STRING) {
                 // CORRECTED ACCESS: The 'value' field is a direct char*, not a union.
                 username = strdup(sub_claim->value);
+                log_system(LOG_DEBUG, "Auth: JWT validation successful for user '%s'.", username);
             } else {
                  log_system(LOG_WARNING, "JWT is valid, but 'sub' claim is missing or not a string.");
             }
@@ -58,8 +61,10 @@ char* authenticate_request(Connection* conn, ServerConfig* config) {
 
     } else {
         // --- "Validate" mock token ---
+        log_system(LOG_DEBUG, "Auth: Using mock token validation.");
         if (strlen(token) > 0) {
             username = strdup(token);
+            log_system(LOG_DEBUG, "Auth: Mock token validation successful for user '%s'.", username);
         } else {
             log_system(LOG_DEBUG, "Auth failed: Mock token is empty.");
         }
@@ -70,6 +75,7 @@ char* authenticate_request(Connection* conn, ServerConfig* config) {
 
 char* generate_token_for_user(const char* username, ServerConfig* config) {
     if (!username) return NULL;
+    log_system(LOG_DEBUG, "Auth: Generating token for user '%s'. JWT enabled: %d", username, config->jwt_enabled);
 
     if (config->jwt_enabled) {
         // --- Generate a real JWT ---
@@ -90,6 +96,7 @@ char* generate_token_for_user(const char* username, ServerConfig* config) {
         
         int r = l8w8jwt_encode(&params);
         if (r == L8W8JWT_SUCCESS && jwt) {
+            log_system(LOG_DEBUG, "Auth: Successfully created JWT for user '%s'.", username);
             // The library allocates memory for jwt, which we pass on to the caller.
             // The caller (api.c) is responsible for building the JSON and freeing this.
             return jwt; 
@@ -100,6 +107,7 @@ char* generate_token_for_user(const char* username, ServerConfig* config) {
         }
     } else {
         // --- Generate a mock token (just the username) ---
+        log_system(LOG_DEBUG, "Auth: Created mock token for user '%s'.", username);
         return strdup(username);
     }
 } 

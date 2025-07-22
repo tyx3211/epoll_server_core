@@ -2,6 +2,7 @@
 #include "router.h"
 #include <string.h>
 #include <stdlib.h>
+#include "logger.h" // Add logger for debug messages
 
 #define MAX_ROUTES 64
 
@@ -31,8 +32,10 @@ void router_add_route(const char* method, const char* path, RouteHandler handler
         R.routes[R.count].path = strdup(path);
         R.routes[R.count].handler = handler;
         R.count++;
+        log_system(LOG_DEBUG, "Router: Registered route [%s] %s", method, path);
+    } else {
+        log_system(LOG_ERROR, "Router: Could not add route [%s] %s, routing table full.", method, path);
     }
-    // In a real application, we might want to log an error if MAX_ROUTES is exceeded
 }
 
 RouteHandler router_find_handler(const char* method, const char* path) {
@@ -40,8 +43,10 @@ RouteHandler router_find_handler(const char* method, const char* path) {
         // Simple string comparison for now.
         // A more advanced router might support wildcards or regex.
         if (strcmp(R.routes[i].method, method) == 0 && strcmp(R.routes[i].path, path) == 0) {
+            log_system(LOG_DEBUG, "Router: Matched request to handler for [%s] %s", method, path);
             return R.routes[i].handler;
         }
     }
+    log_system(LOG_DEBUG, "Router: No matching handler found for [%s] %s", method, path);
     return NULL;
 } 

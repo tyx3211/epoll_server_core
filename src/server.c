@@ -24,7 +24,7 @@
 // Forward declarations
 static void handleConnection(Connection* conn, ServerConfig* config, int epollFd);
 static void handleWrite(Connection* conn, ServerConfig* config, int epollFd);
-static void closeConnection(Connection* conn);
+static void closeConnection(Connection* conn, int epollFd);
 void queue_data_for_writing(struct Connection* conn, const char* data, size_t len, int epollFd);
 
 static int setNonBlocking(int fd) {
@@ -146,6 +146,7 @@ void startServer(const char* configFilePath) {
                     Connection* conn = (Connection*)malloc(sizeof(Connection));
                     conn->fd = connFd;
                     inet_ntop(AF_INET, &client_addr.sin_addr, conn->client_ip, sizeof(conn->client_ip));
+                    log_system(LOG_DEBUG, "Server: Accepted new connection fd=%d from %s", connFd, conn->client_ip);
                     conn->read_buf_size = INITIAL_BUF_SIZE;
                     conn->read_buf = (char*)malloc(conn->read_buf_size);
                     conn->read_len = 0;
@@ -171,7 +172,8 @@ void startServer(const char* configFilePath) {
             } else {
                 // Handle other events like EPOLLRDHUP, EPOLLERR
                 Connection* conn = (Connection*)events[i].data.ptr;
-                closeConnection(conn);
+                log_system(LOG_DEBUG, "Server: Event %d on fd %d triggered close", events[i].events, conn->fd);
+                closeConnection(conn, epollFd);
             }
         }
     }
@@ -181,8 +183,11 @@ void startServer(const char* configFilePath) {
     logger_shutdown();
 }
 
-static void closeConnection(Connection* conn) {
+static void closeConnection(Connection* conn, int epollFd) {
     if (conn) {
+        log_system(LOG_DEBUG, "Server: Closing connection fd=%d", conn->fd);
+        // It's good practice to unregister from epoll before closing the fd
+        epoll_ctl(epollFd, EPOLL_CTL_DEL, conn->fd, NULL);
         close(conn->fd);
         freeHttpRequest(&conn->request);
         free(conn->read_buf);
@@ -194,6 +199,7 @@ static void closeConnection(Connection* conn) {
 static void handleWrite(Connection* conn, ServerConfig* config, int epollFd) {
     if (conn->write_len == 0) {
         // Nothing to write, weird. Unregister interest in EPOLLOUT.
+        log_system(LOG_DEBUG, "Server: handleWrite called on fd %d with empty write buffer.", conn->fd);
         struct epoll_event event;
         event.data.ptr = conn;
         event.events = EPOLLIN | EPOLLET | EPOLLRDHUP;
@@ -202,21 +208,23 @@ static void handleWrite(Connection* conn, ServerConfig* config, int epollFd) {
     }
 
     ssize_t nwritten = write(conn->fd, conn->write_buf + conn->write_pos, conn->write_len - conn->write_pos);
+    log_system(LOG_DEBUG, "Server: Wrote %zd bytes to fd %d", nwritten, conn->fd);
 
     if (nwritten > 0) {
         conn->write_pos += nwritten;
         if (conn->write_pos == conn->write_len) {
             // All data sent successfully
+            log_system(LOG_DEBUG, "Server: Finished writing all data to fd %d.", conn->fd);
             conn->write_pos = 0;
             conn->write_len = 0;
             // Unregister interest in EPOLLOUT and close the connection as we don't support keep-alive
-            closeConnection(conn); 
+            closeConnection(conn, epollFd); 
         }
         // If not all data was sent, we do nothing and wait for the next EPOLLOUT
     } else {
         if (errno != EAGAIN && errno != EWOULDBLOCK) {
             log_system(LOG_ERROR, "write error on fd %d: %s", conn->fd, strerror(errno));
-            closeConnection(conn);
+            closeConnection(conn, epollFd);
         }
         // If EAGAIN or EWOULDBLOCK, just wait for the next EPOLLOUT
     }
@@ -236,6 +244,7 @@ void queue_data_for_writing(struct Connection* conn, const char* data, size_t le
     // Append new data to the write buffer
     memcpy(conn->write_buf + conn->write_len, data, len);
     conn->write_len += len;
+    log_system(LOG_DEBUG, "Server: Queued %zu bytes for writing to fd %d (total_queued=%zu)", len, conn->fd, conn->write_len);
 
     // Register interest in EPOLLOUT to start sending
     struct epoll_event event;
@@ -248,6 +257,7 @@ static void handleConnection(Connection* conn, ServerConfig* config, int epollFd
     // 1. Read data from socket into connection buffer
     char temp_buf[4096];
     ssize_t bytesRead;
+    size_t total_bytes_read_this_call = 0;
     // need space to add '\0'
     while ((bytesRead = read(conn->fd, temp_buf, sizeof(temp_buf))) > 0) {
         if (conn->read_len + bytesRead >= conn->read_buf_size) {
@@ -256,10 +266,13 @@ static void handleConnection(Connection* conn, ServerConfig* config, int epollFd
         }
         memcpy(conn->read_buf + conn->read_len, temp_buf, bytesRead);
         conn->read_len += bytesRead;
+        total_bytes_read_this_call += bytesRead;
     }
+    log_system(LOG_DEBUG, "Server: Read %zu bytes from fd %d. Total buffer size is now %zu.", total_bytes_read_this_call, conn->fd, conn->read_len);
 
     if (bytesRead == 0 || (bytesRead < 0 && errno != EAGAIN)) {
-        closeConnection(conn);
+        log_system(LOG_DEBUG, "Server: Connection closed by peer or read error on fd %d.", conn->fd);
+        closeConnection(conn, epollFd);
         return;
     }
 
@@ -298,12 +311,14 @@ static void handleConnection(Connection* conn, ServerConfig* config, int epollFd
                     conn->request.query_string = NULL;
                 }
                 
-                log_system(LOG_DEBUG, "Parsed request line: %s %s", conn->request.method, conn->request.uri);
+                log_system(LOG_DEBUG, "Parser (fd=%d): Parsed request line: %s %s", conn->fd, conn->request.method, conn->request.raw_uri);
                 conn->parsing_state = PARSE_STATE_HEADERS;
                 conn->parsed_offset += line_len + 2; // +2 for \r\n
             } else { // Malformed
+                 log_system(LOG_WARNING, "Parser (fd=%d): Malformed request line.", conn->fd);
                  free(conn->request.method);
                  // error handling...
+                 closeConnection(conn, epollFd);
             }
         }
     }
@@ -319,7 +334,7 @@ static void handleConnection(Connection* conn, ServerConfig* config, int epollFd
 
             if (line_end == start) { // Empty line, marks end of headers
                 conn->parsed_offset = (line_end - conn->read_buf) + 2;
-                log_system(LOG_DEBUG, "Parsed headers. Content-Length: %zu", conn->request.content_length);
+                log_system(LOG_DEBUG, "Parser (fd=%d): Finished parsing headers. Content-Length=%zu", conn->fd, conn->request.content_length);
                 conn->parsing_state = (conn->request.content_length > 0) ? PARSE_STATE_BODY : PARSE_STATE_COMPLETE;
                 break; // <-- THE FIX: Exit header parsing loop
             }
@@ -339,6 +354,8 @@ static void handleConnection(Connection* conn, ServerConfig* config, int epollFd
                 memcpy(value_buf, value_start, line_end - value_start);
                 value_buf[line_end - value_start] = '\0';
                 conn->request.headers[conn->request.header_count].value = strdup(value_buf);
+                log_system(LOG_DEBUG, "Parser (fd=%d): Parsed header: %s: %s", conn->fd, key_buf, value_buf);
+
 
                 if (strcasecmp(conn->request.headers[conn->request.header_count].key, "Content-Length") == 0) {
                     conn->request.content_length = atol(conn->request.headers[conn->request.header_count].value);
@@ -354,9 +371,11 @@ static void handleConnection(Connection* conn, ServerConfig* config, int epollFd
     if (conn->parsing_state == PARSE_STATE_BODY) {
         // Here we would handle reading the request body.
         // For now, we will assume body is fully read if content_length is met
+        log_system(LOG_DEBUG, "Parser (fd=%d): In body parsing state. Buffer has %zu bytes, need %zu for body.", conn->fd, conn->read_len - conn->parsed_offset, conn->request.content_length);
         if (conn->read_len >= conn->parsed_offset + conn->request.content_length) {
             conn->request.body = conn->read_buf + conn->parsed_offset;
             conn->request.body[conn->request.content_length] = '\0';
+            log_system(LOG_DEBUG, "Parser (fd=%d): Body parsed completely.", conn->fd);
             conn->parsing_state = PARSE_STATE_COMPLETE;
         }
     }
