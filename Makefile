@@ -5,13 +5,12 @@ CFLAGS = -Iinclude -Wall -Wextra -g
 CFLAGS += -Ideps/l8w8jwt/include
 CFLAGS += -Ideps/l8w8jwt/lib/mbedtls/include
 
-# Linker flags - specify the library path and the libraries to link
-LDFLAGS = -Llib -lwebserver -ljwt
+# Linker flags (no longer needed here for linking the final app)
 
 # Directories
 SRC_DIR = src
 OBJ_DIR = obj
-BIN_DIR = bin
+# BIN_DIR is no longer needed here
 LIB_DIR = lib
 
 # Find all .c files in src directory
@@ -19,32 +18,31 @@ SOURCES = $(wildcard $(SRC_DIR)/*.c)
 # Replace .c with .o and put them in obj directory
 OBJECTS = $(patsubst $(SRC_DIR)/%.c, $(OBJ_DIR)/%.o, $(SOURCES))
 
-# We need to add our new auth.o to the library
-# The main object file should be excluded from the library
-SERVER_OBJECTS = $(filter-out $(OBJ_DIR)/main.o, $(OBJECTS))
+# All .o files in obj/ now belong to the server library
+SERVER_OBJECTS = $(OBJECTS)
 
-# Target executable name
+# Target library names
 TARGET_LIB = $(LIB_DIR)/libwebserver.a
 TARGET_JWT_LIB = $(LIB_DIR)/libjwt.a
-TARGET_APP = $(BIN_DIR)/server_app
+# TARGET_APP is now built by the user_backend Makefile
 
-# Default target: build the app, which depends on our libraries
-all: $(TARGET_APP)
+# Default target: build our library, which depends on the JWT library
+all: $(TARGET_LIB)
 
-# Link the application
-# Depends on our main object file and both static libraries
-$(TARGET_APP): $(OBJ_DIR)/main.o $(TARGET_LIB) $(TARGET_JWT_LIB)
-	@mkdir -p $(BIN_DIR)
-	$(CC) $(CFLAGS) $< -o $@ $(LDFLAGS)
+# The JWT library is a dependency for our server library
+$(TARGET_LIB): $(TARGET_JWT_LIB) $(SERVER_OBJECTS)
+	@mkdir -p $(LIB_DIR)
+	ar rcs $@ $(SERVER_OBJECTS)
 
 # Rule to build the JWT library by calling its own Makefile
 $(TARGET_JWT_LIB):
 	$(MAKE) -C deps -f Makefile.jwt
 
+# This rule is now more general for creating the library from objects
 # Create our server's static library
-$(TARGET_LIB): $(SERVER_OBJECTS)
-	@mkdir -p $(LIB_DIR)
-	ar rcs $@ $^
+# $(TARGET_LIB): $(SERVER_OBJECTS)
+# 	@mkdir -p $(LIB_DIR)
+# 	ar rcs $@ $^
 
 # Compile our source files into object files
 $(OBJ_DIR)/%.o: $(SRC_DIR)/%.c
@@ -53,16 +51,16 @@ $(OBJ_DIR)/%.o: $(SRC_DIR)/%.c
 
 # --- Phony Targets for Build Management ---
 
-.PHONY: all clean clean_app jwt
+.PHONY: all clean clean_lib jwt
 
 # Pre-task to build the JWT library explicitly
 jwt:
 	$(MAKE) -C deps -f Makefile.jwt
 
-# Clean only the main application's build artifacts
-clean_app:
-	rm -rf $(OBJ_DIR) $(BIN_DIR) $(TARGET_LIB)
+# Clean only the library's build artifacts
+clean_lib:
+	rm -rf $(OBJ_DIR) $(TARGET_LIB)
 
-# Full clean: clean the app and the JWT library
-clean: clean_app
+# Full clean: clean our library and the JWT library
+clean: clean_lib
 	$(MAKE) -C deps -f Makefile.jwt clean 
