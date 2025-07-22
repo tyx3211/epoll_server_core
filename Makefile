@@ -1,7 +1,7 @@
 # Compiler and flags
 CC = gcc
 # We need to add the include paths for our dependencies here as well
-CFLAGS = -Isrc -Wall -Wextra -g
+CFLAGS = -Iinclude -Wall -Wextra -g
 CFLAGS += -Ideps/l8w8jwt/include
 CFLAGS += -Ideps/l8w8jwt/lib/mbedtls/include
 
