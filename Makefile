@@ -4,6 +4,7 @@ CC = gcc
 CFLAGS = -Iinclude -Wall -Wextra -g
 CFLAGS += -Ideps/l8w8jwt/include
 CFLAGS += -Ideps/l8w8jwt/lib/mbedtls/include
+CFLAGS += -Ideps/yyjson  # Phase 3: JSON support
 
 # Linker flags (no longer needed here for linking the final app)
 
@@ -18,8 +19,11 @@ SOURCES = $(wildcard $(SRC_DIR)/*.c)
 # Replace .c with .o and put them in obj directory
 OBJECTS = $(patsubst $(SRC_DIR)/%.c, $(OBJ_DIR)/%.o, $(SOURCES))
 
+# yyjson object file (Phase 3)
+YYJSON_OBJ = $(OBJ_DIR)/yyjson.o
+
 # All .o files in obj/ now belong to the server library
-SERVER_OBJECTS = $(OBJECTS)
+SERVER_OBJECTS = $(OBJECTS) $(YYJSON_OBJ)
 
 # Target library names
 TARGET_LIB = $(LIB_DIR)/libwebserver.a
@@ -48,6 +52,11 @@ $(TARGET_JWT_LIB):
 $(OBJ_DIR)/%.o: $(SRC_DIR)/%.c
 	@mkdir -p $(OBJ_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
+
+# Compile yyjson (Phase 3)
+$(YYJSON_OBJ): deps/yyjson/yyjson.c
+	@mkdir -p $(OBJ_DIR)
+	$(CC) -Ideps/yyjson -Wall -O2 -c $< -o $@
 
 # --- Phony Targets for Build Management ---
 

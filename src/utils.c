@@ -109,3 +109,129 @@ char* get_query_param(const char* str, const char* key) {
     free(str_copy);
     return value;
 }
+
+// ============================================================================
+// Phase 2: Pre-parsed Parameters API
+// ============================================================================
+
+#include "http.h"  // For HttpRequest, QueryParam
+#include <strings.h> // For strcasecmp
+
+int parse_params(const char* str, void* params_ptr, int max_params) {
+    if (!str || !params_ptr || max_params <= 0) return 0;
+    
+    QueryParam* params = (QueryParam*)params_ptr;
+    int count = 0;
+    
+    // Duplicate the string because we'll modify it
+    char* str_copy = strdup(str);
+    if (!str_copy) return 0;
+    
+    char* saveptr;
+    char* token = strtok_r(str_copy, "&", &saveptr);
+    
+    while (token != NULL && count < max_params) {
+        char* eq = strchr(token, '=');
+        if (eq) {
+            *eq = '\0';
+            char* decoded_key = urlDecode(token);
+            char* decoded_value = urlDecode(eq + 1);
+            
+            if (decoded_key && decoded_value) {
+                params[count].key = decoded_key;
+                params[count].value = decoded_value;
+                count++;
+                log_system(LOG_DEBUG, "Utils: Parsed param[%d]: %s = %s", count - 1, decoded_key, decoded_value);
+            } else {
+                free(decoded_key);
+                free(decoded_value);
+            }
+        }
+        token = strtok_r(NULL, "&", &saveptr);
+    }
+    
+    free(str_copy);
+    return count;
+}
+
+// Helper to get Content-Type header value
+static const char* get_content_type(const HttpRequest* req) {
+    for (int i = 0; i < req->header_count; i++) {
+        if (strcasecmp(req->headers[i].key, "Content-Type") == 0) {
+            return req->headers[i].value;
+        }
+    }
+    return NULL;
+}
+
+void http_parse_all_params(HttpRequest* req) {
+    if (!req) return;
+    
+    // Parse query string parameters
+    if (req->raw_query_string && strlen(req->raw_query_string) > 0) {
+        req->query_param_count = parse_params(
+            req->raw_query_string, 
+            req->query_params, 
+            MAX_PARAMS
+        );
+        log_system(LOG_DEBUG, "Utils: Parsed %d query parameters.", req->query_param_count);
+    }
+    
+    // Parse body based on Content-Type
+    if (req->body && req->content_length > 0) {
+        const char* content_type = get_content_type(req);
+        if (content_type) {
+            if (strstr(content_type, "application/x-www-form-urlencoded")) {
+                // Parse form body parameters
+                req->body_param_count = parse_params(
+                    req->body, 
+                    req->body_params, 
+                    MAX_PARAMS
+                );
+                log_system(LOG_DEBUG, "Utils: Parsed %d body parameters (x-www-form-urlencoded).", req->body_param_count);
+            } else if (strstr(content_type, "application/json")) {
+                // Phase 3: Parse JSON body
+                req->json_doc = yyjson_read(req->body, req->content_length, 0);
+                if (req->json_doc) {
+                    req->json_root = yyjson_doc_get_root(req->json_doc);
+                    log_system(LOG_DEBUG, "Utils: Parsed JSON body successfully.");
+                } else {
+                    log_system(LOG_WARNING, "Utils: Failed to parse JSON body.");
+                }
+            }
+        }
+    }
+}
+
+const char* http_get_param(const HttpRequest* req, const char* key) {
+    if (!req || !key) return NULL;
+    
+    // Search query params first
+    const char* result = http_get_query_param(req, key);
+    if (result) return result;
+    
+    // Then search body params
+    return http_get_body_param(req, key);
+}
+
+const char* http_get_query_param(const HttpRequest* req, const char* key) {
+    if (!req || !key) return NULL;
+    
+    for (int i = 0; i < req->query_param_count; i++) {
+        if (strcmp(req->query_params[i].key, key) == 0) {
+            return req->query_params[i].value;
+        }
+    }
+    return NULL;
+}
+
+const char* http_get_body_param(const HttpRequest* req, const char* key) {
+    if (!req || !key) return NULL;
+    
+    for (int i = 0; i < req->body_param_count; i++) {
+        if (strcmp(req->body_params[i].key, key) == 0) {
+            return req->body_params[i].value;
+        }
+    }
+    return NULL;
+}

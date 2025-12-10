@@ -55,6 +55,20 @@ void freeHttpRequest(HttpRequest* req) {
             free(req->headers[i].key);
             free(req->headers[i].value);
         }
+        // Free pre-parsed query parameters (Phase 2)
+        for (int i = 0; i < req->query_param_count; i++) {
+            free(req->query_params[i].key);
+            free(req->query_params[i].value);
+        }
+        // Free pre-parsed body parameters (Phase 2)
+        for (int i = 0; i < req->body_param_count; i++) {
+            free(req->body_params[i].key);
+            free(req->body_params[i].value);
+        }
+        // Free JSON document (Phase 3)
+        if (req->json_doc) {
+            yyjson_doc_free(req->json_doc);
+        }
         // Use memset to be safe, especially since this struct is part of another struct
         memset(req, 0, sizeof(HttpRequest));
     }

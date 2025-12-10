@@ -384,6 +384,9 @@ static void handleConnection(Connection* conn, ServerConfig* config, int epollFd
     if (conn->parsing_state == PARSE_STATE_COMPLETE) {
         log_system(LOG_INFO, "Handling complete request: %s %s", conn->request.method, conn->request.uri);
         
+        // Pre-parse all parameters (Phase 2)
+        http_parse_all_params(&conn->request);
+        
         // --- Routing Logic ---
         RouteHandler handler = router_find_handler(conn->request.method, conn->request.uri);
         if (handler) {

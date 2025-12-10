@@ -3,5 +3,10 @@ bin/
 lib/
 log/
 obj/
-deps/
+deps/*
 .cache/
+www/
+mongoose/
+
+# 特地把yyjson取消忽略
+!deps/yyjson/

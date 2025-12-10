@@ -4,6 +4,7 @@
 #include <stddef.h>
 #include <netinet/in.h> // For INET_ADDRSTRLEN
 #include "config.h" // For ServerConfig
+#include "yyjson.h" // Phase 3: JSON support
 
 typedef enum {
     PARSE_STATE_REQ_LINE,
@@ -13,11 +14,18 @@ typedef enum {
 } ParsingState;
 
 #define MAX_HEADERS 32
+#define MAX_PARAMS 32
 
 typedef struct {
     char* key;
     char* value;
 } HttpHeader;
+
+// Key-Value pair for parsed parameters (query string or form body)
+typedef struct {
+    char* key;
+    char* value;
+} QueryParam;
 
 // Represents a parsed HTTP request
 typedef struct {
@@ -31,6 +39,16 @@ typedef struct {
     int header_count;
     char* body;
     size_t content_length;
+
+    // Pre-parsed parameters (Phase 2)
+    QueryParam query_params[MAX_PARAMS];  // Parsed from query string
+    int query_param_count;
+    QueryParam body_params[MAX_PARAMS];   // Parsed from form body (x-www-form-urlencoded)
+    int body_param_count;
+
+    // JSON body (Phase 3) - auto-parsed when Content-Type is application/json
+    yyjson_doc* json_doc;   // Immutable JSON document (for reading)
+    yyjson_val* json_root;  // Root value of the JSON document
 
     // Fields for authentication
     const char* auth_token; // Raw token from header
