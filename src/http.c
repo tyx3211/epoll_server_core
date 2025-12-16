@@ -80,7 +80,7 @@ void handleStaticRequest(Connection* conn, const ServerConfig* config, int epoll
     
     if (strcasecmp(method, "GET") != 0 && strcasecmp(method, "HEAD") != 0) {
         log_system(LOG_DEBUG, "Static: Received unsupported method '%s' for URI '%s'", method, uri);
-        char response[] = "HTTP/1.1 501 Not Implemented\r\nConnection: close\r\n\r\nNot Implemented";
+        char response[] = "HTTP/1.1 501 Not Implemented\r\n\r\nNot Implemented";
         queue_data_for_writing(conn, response, sizeof(response) - 1, epollFd);
         log_access(conn->client_ip, method, conn->request.raw_uri, 501);
         return;
@@ -100,7 +100,7 @@ void handleStaticRequest(Connection* conn, const ServerConfig* config, int epoll
     if (strstr(path, "../") != NULL) {
         log_system(LOG_WARNING, "Static: Path traversal attempt blocked for URI '%s'", uri);
         log_access(conn->client_ip, method, uri, 403);
-        char response[] = "HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\nForbidden";
+        char response[] = "HTTP/1.1 403 Forbidden\r\n\r\nForbidden";
         queue_data_for_writing(conn, response, sizeof(response) - 1, epollFd);
         return;
     }
@@ -110,11 +110,11 @@ void handleStaticRequest(Connection* conn, const ServerConfig* config, int epoll
         log_system(LOG_DEBUG, "Static: Failed to open file '%s'. errno: %d (%s)", path, errno, strerror(errno));
         if (errno == ENOENT) {
             log_access(conn->client_ip, method, uri, 404);
-            char response[] = "HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\nNot Found";
+            char response[] = "HTTP/1.1 404 Not Found\r\n\r\nNot Found";
             queue_data_for_writing(conn, response, sizeof(response) - 1, epollFd);
         } else {
             log_access(conn->client_ip, method, uri, 403);
-            char response[] = "HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\nForbidden";
+            char response[] = "HTTP/1.1 403 Forbidden\r\n\r\nForbidden";
             queue_data_for_writing(conn, response, sizeof(response) - 1, epollFd);
         }
         return;
@@ -125,7 +125,7 @@ void handleStaticRequest(Connection* conn, const ServerConfig* config, int epoll
         log_system(LOG_ERROR, "fstat error on %s: %s", path, strerror(errno));
         close(fileFd);
         // Let's send a 500 error to the client
-        char response[] = "HTTP/1.1 500 Internal Server Error\r\nConnection: close\r\n\r\nInternal Server Error";
+        char response[] = "HTTP/1.1 500 Internal Server Error\r\n\r\nInternal Server Error";
         queue_data_for_writing(conn, response, sizeof(response) - 1, epollFd);
         log_access(conn->client_ip, method, uri, 500);
         return;
@@ -139,7 +139,7 @@ void handleStaticRequest(Connection* conn, const ServerConfig* config, int epoll
     char header[512];
     int headerLen = snprintf(header, sizeof(header),
                              "HTTP/1.1 200 OK\r\n"
-                             "Connection: close\r\n"
+                             ""
                              "Content-Type: %s\r\n"
                              "Content-Length: %ld\r\n\r\n",
                              mime_type, 

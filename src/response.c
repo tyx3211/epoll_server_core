@@ -142,9 +142,14 @@ void http_response_send(struct Connection* conn, HttpResponse* res, int epollFd)
                           "HTTP/1.1 %d %s\r\n",
                           res->status_code, res->status_text);
     
-    // Add Connection: close (we don't support keep-alive yet)
-    offset += snprintf(header_buf + offset, header_buf_size - offset,
-                       "Connection: close\r\n");
+    // Add Connection header based on keep_alive flag
+    if (conn->request.keep_alive) {
+        offset += snprintf(header_buf + offset, header_buf_size - offset,
+                           "Connection: keep-alive\r\n");
+    } else {
+        offset += snprintf(header_buf + offset, header_buf_size - offset,
+                           "Connection: close\r\n");
+    }
     
     // Add Content-Length
     offset += snprintf(header_buf + offset, header_buf_size - offset,

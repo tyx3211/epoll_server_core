@@ -10,7 +10,8 @@ typedef enum {
     PARSE_STATE_REQ_LINE,
     PARSE_STATE_HEADERS,
     PARSE_STATE_BODY,
-    PARSE_STATE_COMPLETE
+    PARSE_STATE_COMPLETE,
+    PARSE_STATE_SENDING // New state: Request handling finished, sending response
 } ParsingState;
 
 #define MAX_HEADERS 32
@@ -34,6 +35,10 @@ typedef struct {
     char* uri;     // The URL-decoded URI path (without query string)
     char* raw_query_string; // The original, undecoded query string
     char* query_string; // The URL-decoded query string
+
+    // HTTP Version info for logic decisions
+    int minor_version; // 0 for HTTP/1.0, 1 for HTTP/1.1
+    bool keep_alive;   // Derived from Connection header & version
 
     HttpHeader headers[MAX_HEADERS];
     int header_count;
